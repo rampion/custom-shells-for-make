@@ -1,0 +1,10 @@
+#!/bin/sh
+# Helper script to find an executable with the matching name and version in the
+# PATH
+
+exe_name=$1
+version_pattern=$2
+which -a "$exe_name" | while read exe_path; do
+  $exe_path -v | grep "$version_pattern" > /dev/null && { echo "$exe_path" ; exit 0 ; }
+done
+exit $?
