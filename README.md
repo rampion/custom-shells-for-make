@@ -108,7 +108,7 @@ export CUSTOM
 ifeq (3, $(firstword $(subst ., ,$(MAKE_VERSION))))
 	SHELL = $(CUSTOM)
 else
-	SHELL=/bin/sh -c eval\ "f(){\ $$CUSTOM\ "'"$$@"'";\ }";\ f\ "$$@" -
+	SHELL=/bin/sh -c eval\ "f(){\ $$CUSTOM\ "'"$$@"'";\ }";\ f\ "$$@" /bin/sh
 endif
 ```
 
@@ -517,23 +517,27 @@ to a persistent shell that runs in the background
 
 ```makefile
 define PERSIST
-:	Path for the named pipe used to pass a stream of recipe lines to a
-	backgrounded persistent shell;
+: Using octothorpe for comments is not make-v3 compatible, but we can fake     ;
+: comments using ':', the no-op command, as long as the comment does not use   ;
+: any shell syntax that would break it.                                        ;
+
+: Path for the named pipe used to pass a stream of recipe lines to a           ;
+: backgrounded persistent shell                                                ;
 entire_recipe=.$@-entire_recipe.fifo;
 
-:	Path for the named pipe used to indicate when a single recipe line has
-	finished running;
+: Path for the named pipe used to indicate when a single recipe line has       ;
+: finished running                                                             ;
 recipe_line_complete=.$@-recipe_line_complete.fifo;
 
 start_background_shell_if_necessary(){
-	:	Since the background process deletes the pipes when the shell is complete,
-		assume that the background shell is running if and only if the pipes exist;
+	: Since the background process deletes the pipes when the shell is complete, ;
+	: assume that the background shell is running if and only if the pipes exist ;
 
 	if ! [[ -p $$entire_recipe && -p $$recipe_line_complete ]]; then
 		mkfifo $$entire_recipe $$recipe_line_complete;
 
-		:	In a backgrounded process, run the entire recipe in a subshell and then
-			clean up the pipes;
+		: In a backgrounded process, run the entire recipe in a subshell and then  ;
+		: clean up the pipes                                                       ;
 		{
 			/bin/sh $$entire_recipe;
 			rm -f $$entire_recipe $$recipe_line_complete;
@@ -542,32 +546,33 @@ start_background_shell_if_necessary(){
 };
 
 run_recipe_line(){
-	:	Write the output of all the following commands to the recipe pipe for the
-		backgrounded shell. 
+	: Write the output of all the following commands to the recipe pipe for the  ;
+	: backgrounded shell.                                                        ;
 
-		As long as at least one process has a writable file handle for the recipe
-		pipe open, EOF will not be written to the pipe and the backgrounded shell
-		will continue trying to run commands from it.
+	: As long as at least one process has a writable file handle for the recipe  ;
+	: pipe open, EOF will not be written to the pipe and the backgrounded shell  ;
+	: will continue trying to run commands from it.                              ;
 
-		If instead commands wrote to the recipe pipe individually, then EOF would
-		be written to the pipe at the end of each command, allowing the backgrounded
-		shell to reach the "end" of the pipe and move on to cleanup prematurely.
-	;
+	: If instead commands wrote to the recipe pipe individually, then EOF would  ;
+	: be written to the pipe at the end of each command, allowing the            ;
+	: backgrounded                                                               ;
+	: shell to reach the "end" of the pipe and move on to cleanup prematurely.   ;
+
 	exec >$$entire_recipe;
 
 	recipe_line=$$2;
 	echo "$$recipe_line";
 
-	:	Use the a pipe as a synchronization lock to detect when the backgrounded
-		shell has finished running this recipe line. Otherwise, if we did not wait,
-		the output of one line might print after make echoes the next recipe line;
+	: Use the a pipe as a synchronization lock to detect when the backgrounded   ;
+	: shell has finished running this recipe line. Otherwise, if we did not wait,;
+	: the output of one line might print after make echoes the next recipe line  ;
 	echo "true > $$recipe_line_complete";
 	cat $$recipe_line_complete >/dev/null;
 
-	:	Use "sleep" to keep the recipe file handle open in the background
-		for long enough for make to call run_recipe_line again with the next
-		recipe line, preventing the background shell from ending between recipe
-		lines;
+	: Use "sleep" to keep the recipe file handle open in the background          ;
+	: for long enough for make to call run_recipe_line again with the next       ;
+	: recipe line, preventing the background shell from ending between recipe    ;
+	: lines                                                                      ;
 	sleep .1 &
 };
 
@@ -626,11 +631,11 @@ multiline:
 	echo $${y:-unset}
 ```
 
-    $ make multiline
+    $ make-v4 multiline
     x=1;\
-    	y=2;\
-    	echo ${x:-unset};\
-    	echo ${y:-unset}
+    y=2;\
+    echo ${x:-unset};\
+    echo ${y:-unset}
     1
     2
 

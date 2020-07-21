@@ -23,23 +23,31 @@
 # monospace block), we'll need to tell cram to use that for test detection,
 # rather than the default of two spaces.
 
-.PHONY: _test _test_v3 _test_v4
-_test: _test_v3 _test_v4 __test
-
-__test:
+.PHONY: _test
+_test:
 	cram --indent=4 README.md
 
+# GNU Make version 3 and 4 have slightly different behaviour in certain
+# situations.
+#
+# README.md expects the $make_v3 and $make_v4 environment variables to contain
+# paths to each executable, respectively, so it can demonstrate those
+# differences.
 export make_v3
-make_v3=$(shell $(dir $(MAKEFILE_LIST))/get_version make '^GNU Make 3\.')
-
-_test_v3: PATH:=$(dir $(make_v3)):$(PATH)
-_test_v3: __test
+make_v3=$(shell $(dir $(MAKEFILE_LIST))get_version make '^GNU Make 3\.')
 
 export make_v4
-make_v4=$(shell $(dir $(MAKEFILE_LIST))/get_version make '^GNU Make 4\.')
+make_v4=$(shell $(dir $(MAKEFILE_LIST))get_version make '^GNU Make 4\.')
 
+# Most examples in the README.md just use `make`, so we should make sure
+# they work whether that resolves to version 3 or version 4.
+.PHONY: _test_v3
+_test_v3: PATH:=$(dir $(make_v3)):$(PATH)
+_test_v3: _test
+
+.PHONY: _test_v4
 _test_v4: PATH:=$(dir $(make_v4)):$(PATH)
-_test_v4: __test
+_test_v4: _test
 
 # By default, in some distributions of make, recursive calls to `make` (like
 # those in the tests below) generate messages from `make` about which directory
@@ -74,7 +82,8 @@ _test_v4: __test
 # printing directory messages so we don't have to account for these messages.
 .PHONY: test
 test:
-	@make --no-print-directory _test
+	@make --no-print-directory _test_v3
+	@make --no-print-directory _test_v4
 
 README.makefile: $(dir $(MAKEFILE_LIST))README.md
 	sed -n '/^ *```makefile$$/,/^ *```$$/{//g;s/^ *//;p;}' $< > $@
