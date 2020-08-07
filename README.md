@@ -1,19 +1,15 @@
-TODO:
-- make examples work with GNU make and not just BSD
-- .ONESHELL
-
 <!--
 This README.md file is designed to be tested using `cram`.  The four-space
 indented codeblocks serve as tests for the makefile snippets.
 
-First, the makefile snippets need to scraped to build the Makefile used in the
-tests.
+First, the makefile snippets need to be scraped to build the Makefile used in
+the tests.
 
     $ make -f $TESTDIR/Makefile README.makefile
     * (glob)
     $ mv README.makefile Makefile
 
-We should be given paths to make versions 3 and 4
+The process running the tests should be given paths to GNU Make versions 3 and 4
 
     $ alias make-v3=$make_v3
     $ make-v3 -v | head -n 1
@@ -35,7 +31,7 @@ There are three main sections:
 
 1. Specifying a custom `SHELL`
 2. Writing recipes in non-shell programming languages
-3. Persisting the shell betweens lines of the recipe
+3. Using a single shell for an entire recipe
 
 There's also an appendix detailing various Makefile features some readers
 might not be familiar with:
@@ -44,62 +40,106 @@ might not be familiar with:
 <li>What's a recipe?</li>
 <li>What's a target?</li>
 <li>What's a rule?</li>
-<li>What's that <code>.PHONY</code> thing?</li>
-<li>What's that <code>.DEFAULT_GOAL</code> thing?</li>
-<li>What's that <code>define</code> thing?</li>
+<li>What does <code>.PHONY</code> do?</li>
+<li>Why are you using double dollar signs (<code>$$</code>)?</li>
 <li>Why did you start listing targets twice?</li>
-<li>Why are you using double dollar signs everywhere ($$)?</li>
-<li>What's that <code>$@</code> thing?</li>
-<li>What's that <code>.INTERMEDIATE</code> thing?</li>
-<li>What's that <code>.SILENT</code> thing?</li>
+<li>What does <code>define</code> do?</li>
+<li>What does <code>$@</code> mean?</li>
+<li>What does <code>.INTERMEDIATE</code> do?</li>
+<li>What does <code>.SILENT</code> do?</li>
 </ol>
 
 
 # 1. Specifying a custom `SHELL`
 
-By default, `make` runs each line of a recipe in `/bin/sh`
+By default, `make` runs each step of a recipe in `/bin/sh`
 
 ```makefile
-.PHONY: by-default
-by-default:
+.PHONY: print-shell-name
+print-shell-name:
 	echo $$0
 ```
 
-    $ make by-default
+    $ make print-shell-name
     echo $0
     /bin/sh
 
 The shell `make` uses can be changed by setting the `SHELL` Makefile variable,
-either globally or per-rule:
+either globally, per-rule, or at the command line:
 
 ```makefile
 .PHONY: use-bash
 use-bash: SHELL=/bin/bash
-use-bash:
-	echo $$0
+use-bash: print-shell-name
 ```
 
     $ make use-bash
     echo $0
     /bin/bash
+    $ make print-shell-name SHELL=/bin/zsh
+    echo $0
+    /bin/zsh
 
 The value of `SHELL` doesn't have to be a path to an executable file, though.
 It can contain an arbitrary `sh` command.  The only requirement is that the
-command can be run with two arguments: `-c` and the current recipe line.
+command can be run with `-c` and the current recipe step.
 
-In `make` v3, the `SHELL` could even contain multiple commands chained
-together with `;`, as long as it *ends* in something that can accept the `-c`
-and the recipe line.  We can run other `sh` commands first and then tack on a
-call to `/bin/sh` or some other shell with `;`.
+For example, we could use the shell's `printf` command to inspect our arguments:
 
-This changed in `make` v4, but it's still possible to define a `SHELL` using
-a multi-command chain if the chain is escaped and wrapped in another call to
-`/bin/sh`.
+    $ make print-shell-name SHELL='printf arg\ =\ %s\\n'
+    echo $0
+    arg = -c
+    arg = echo $0
+
+## Digression: chaining multiple commands
+To do anything much more complex than that, we need to have a `SHELL`
+that contains multiple shell commands chained together.
+
+In `make` v3 this is trivial, the `SHELL` can contain multiple commands
+chained together with `;` as long as it *ends* in something that can accept the
+`-c` and the recipe step.  We can run other `sh` commands first and then tack on
+a call to `/bin/sh`.
+
+```makefile
+.PHONY: greeting
+greeting:
+	echo hi
+```
+
+    $ make-v3 greeting SHELL='echo "--before--";/bin/sh'
+    echo hi
+    --before--
+    hi
+
+This changed in `make` v4, which behaves differently when `SHELL` is defined as
+a semicolon-separated chain; instead, everything is passed as an argument to the
+first command:
+
+    $ make-v4 greeting SHELL='echo "--before--";/bin/sh'
+    echo hi
+    "--before--";/bin/sh -c echo hi
+
+The differences between the two versions are similar to the differences betweeen
+using `eval` and `exec`:
+
+    $ eval 'echo "--before--";/bin/sh -c echo\ hi'
+    --before--
+    hi
+    $ /bin/sh -c 'exec $@' /bin/sh 'echo "--before--";/bin/sh -c echo hi'
+    "--before--";/bin/sh -c echo hi
+
+However, it's still possible to define a `SHELL` for `make` v4 that contains a
+multi-command chain by escaping it and wrapping it in another call to `/bin/sh`.
+
+    $ make-v4 greeting SHELL='/bin/sh -c echo\ "--before--";/bin/sh\ "$$@" /bin/sh'
+    echo hi
+    --before--
+    hi
 
 If you're going to be changing the `SHELL` value per-recipe and you want to be
 compatible with v3 and v4, this escaping can be centralized by defining `SHELL`
-lazily in terms of another makefile variable. Here we arbitrarily name it
-`CUSTOM`.
+lazily in terms of another makefile variable that contains the unescaped
+definition. Here we arbitrarily name that variable `CUSTOM`.
 
 ```makefile
 CUSTOM = /bin/sh
@@ -112,18 +152,25 @@ else
 endif
 ```
 
-For example, we could run a command before each recipe line:
+We'll be using `CUSTOM` for the rest of the article, but it's worth remembering
+that `CUSTOM` isn't a special Makefile variable, it's merely used in our
+definition of `SHELL`.
+
+---
+
+Now that we know how to chain multiple commands, we can tell `make` to run a
+command before each recipe step:
 
 ```makefile
-.PHONY: before-each-line
-before-each-line: CUSTOM=echo '---before---';/bin/sh
-before-each-line:
+.PHONY: before-each-step
+before-each-step: CUSTOM=echo '---before---';/bin/sh
+before-each-step:
 	echo one
 	echo two
 	echo three
 ```
 
-    $ make before-each-line
+    $ make before-each-step
     echo one
     ---before---
     one
@@ -134,38 +181,18 @@ before-each-line:
     ---before---
     three
 
-As a more practical use case, I could use this functionality to load a python
-virtual environment into the shell before running a recipe line, removing the
-duplication in a set of rules like:
-
-```make
-# assuming make v3
-SHELL := . .venv/bin/activate;/bin/sh
-
-dist/wigit-%.tar.gz: setup.py ${SRC} .venv/bin/activate
-	./setup.py --quiet sdist
-
-# check the code for style problems
-pep8: .venv/bin/activate
-	pycodestyle setup.py ${SRC}
-
-# run a python3 repl with the virtualenv in scope
-repl: .venv/bin/activate
-	python3
-```
-
 It's a little awkward trying to fit long commands into a one-liner next to
 the rule's SHELL definition, so we'll start using `make`'s `define` syntax
 for multi-line variable assignments.
 
 ```makefile
-define BEFORE-EACH-LINE
+define BEFORE-EACH-STEP
 echo '---before---';
 /bin/sh
 endef
 
 .PHONY: before-with-define
-before-with-define: CUSTOM=$(BEFORE-EACH-LINE)
+before-with-define: CUSTOM=$(BEFORE-EACH-STEP)
 before-with-define:
 	echo one
 	echo two
@@ -183,9 +210,9 @@ before-with-define:
     ---before---
     three
 
-`define`-blocks are pretty nice, except in make v3 newlines don't terminate
-commands as they would in a shell script when the command is invoked as SHELL,
-so there's a couple of things to look out for:
+`define`-blocks are pretty nice, but there's a fairly important gotcha. in
+`make` v3 newlines don't terminate commands as they would in a shell script when
+the script is invoked as SHELL, so there's a couple of things to look out for:
 
 - you have to terminate each command with a semicolon since all the lines are
   effectively strung together
@@ -207,13 +234,18 @@ so there's a couple of things to look out for:
     echo ok
     --before--
     /bin/sh -c echo ok
+  ```
+
+  This is no longer a problem in `make` v4:
+
+  ```
     $ make-v4 missing-semicolon
     echo ok
     --before--
     ok
   ```
 
-- you can't use an octothorpe (#) to create comments in the `define`-block as
+- you can't use an octothorpe (`#`) to create comments in the `define`-block as
   it will cause all the following lines to be commented out
 
   ```makefile
@@ -233,6 +265,11 @@ so there's a couple of things to look out for:
     $ make-v3 with-octothorpe
     echo ok
     --before--
+  ```
+
+  Again, this is not a problem in `make` v4:
+
+  ```
     $ make-v4 with-octothorpe
     echo ok
     --before--
@@ -242,25 +279,24 @@ so there's a couple of things to look out for:
 But with those restrictions in mind, we can still do some pretty interesting
 things before invoking the shell.
 
-For example, we could use the shell's `trap` command to run code when the
-shell exits, in effect setting up code to be called after each line of the
-recipe:
+For example, we could use the shell's `trap` command to run code when the shell
+exits, in effect setting up code to be called *after* each step of the recipe:
 
 ```makefile
-define AFTER-EACH-LINE
+define AFTER-EACH-STEP
 trap 'echo ---after---' EXIT;
 /bin/sh
 endef
 
-.PHONY: after-each-line
-after-each-line: CUSTOM=$(AFTER-EACH-LINE)
-after-each-line:
+.PHONY: after-each-STEP
+after-each-step: CUSTOM=$(AFTER-EACH-STEP)
+after-each-step:
 	echo one
 	echo two
 	echo three
 ```
 
-    $ make after-each-line
+    $ make after-each-step
     echo one
     one
     ---after---
@@ -271,7 +307,8 @@ after-each-line:
     three
     ---after---
 
-Or we could define a custom function to make available to the shell
+Or we could define a custom function to that would be available for recipe steps
+to use:
 
 ```makefile
 define CUSTOM-FUNCTION
@@ -295,7 +332,7 @@ with-custom-function:
     log pad kid poured curd pulled cod
     <log message='pad kid poured curd pulled cod'/>
 
-This whole time we've been passing the `-c` <recipe-line> arguments to a
+This whole time we've been passing the `-c` <recipe-step> arguments to as
 shell, but shells aren't the only commands that can be called this way.
 
 For example, `/bin/echo` will happily take `-c`:
@@ -321,10 +358,10 @@ want with it?
 
 Pulling a trick out of `git-config`'s book, we could also use the command
 specified by `SHELL` to define a shell function and let that function be
-called with `-c` and the current recipe line.
+called with `-c` and the current recipe step.
 
 For example, we could define a function that just inspects its arguments
-and have each recipe line invoked with that as its "shell":
+and have each recipe step invoked with that as its "shell":
 
 ```makefile
 define INSPECT
@@ -396,10 +433,10 @@ SHELL's arguments is extremely powerful as it lets us arbitrarily manipulate
 those arguments, pass them to whatever commands we want, and manipulate those
 commands' output.
 
-For example, we could interpret the recipe lines in a non-shell programming
+For example, we could interpret the recipe steps in a non-shell programming
 language, like ruby.
 
-Here we pass the recipe line to ruby, asking it to evaluate the line and
+Here we pass the recipe step to ruby, asking it to evaluate the step and
 print its resulting value.
 
 ```makefile
@@ -486,11 +523,11 @@ in-python:
     shutil.rmtree('a-dir')
     # None
 
-# 3. Persisting the shell between lines of the recipe
+# 3. Using a single shell for an entire recipe
 
 One of the things that surprises many people new to `make` is that the shell
 used in recipes is non-persistent; that is, a new shell is invoked for each
-line of the recipe.
+step of the recipe.
 
 ```makefile
 .PHONY: non-persistent
@@ -512,8 +549,346 @@ non-persistent:
 In the above example, `x` and `y` are unset because the shells that set x and
 y have both closed, taking their settings with them.
 
-With some work though, we can use a custom SHELL function to pass recipe lines
-to a persistent shell that runs in the background
+GNU Make version 4 introduced [the `.ONESHELL` special target](https://www.gnu.org/software/make/manual/html_node/One-Shell.html), which tells `make` to pass all the steps of each recipe to a single shell to be run together:
+
+<!--
+    $ cp $TESTDIR/oneshell.makefile .
+-->
+    $ cat oneshell.makefile
+    .ONESHELL:
+    
+    default:
+    	x=1
+    	y=2
+    	echo $${x:-unset}
+    	echo $${y:-unset}
+    
+    $ make-v4 -f oneshell.makefile
+    x=1
+    y=2
+    echo ${x:-unset}
+    echo ${y:-unset}
+    1
+    2
+
+`.ONESHELL` is very easy to use, but it has some drawbacks.
+
+- It's a bit of a blunt instrument, as you can't use `.ONESHELL` to specify
+  that a single recipe should be run in a persistent shell, only to tell
+  `make` to use that strategy for *all* the recipes in a file
+
+- It only works in GNU Make v4 and above, and will fall back silently
+  to a non-persistent shell in v3:
+
+  ```
+    $ make-v3 -f oneshell.makefile
+    x=1
+    y=2
+    echo ${x:-unset}
+    unset
+    echo ${y:-unset}
+    unset
+  ```
+
+- The echoed commands and their output are no longer interspersed, so it's a
+  little harder to see what command emits what.
+
+To take another approach, a trailing backslash joins multiple lines in a recipe
+into a single step:
+
+```makefile
+.PHONY: trailing-backslash-example
+trailing-backslash-example:
+	echo \
+	one \
+	t\
+	w\
+	o\
+	 \
+	three
+```
+
+    $ make-v3 trailing-backslash-example
+    echo \
+    	one \
+    	t\
+    	w\
+    	o\
+    	 \
+    	three
+    one two three
+
+One slight difference between v3 and v4 is whether the leading tabs on the later
+lines is shown when the command is echoed:
+
+    $ make-v4 trailing-backslash-example
+    echo \
+    one \
+    t\
+    w\
+    o\
+     \
+    three
+    one two three
+
+We can combine this with `/bin/sh`'s `;` operator for chaining multiple commands into
+a single line to get a recipe that runs in a single shell.
+
+```makefile
+.PHONY: multi-line
+multi-line:
+	x=1;\
+	y=2;\
+	echo $${x:-unset};\
+	echo $${y:-unset}
+```
+
+    $ make-v3 multi-line
+    x=1;\
+    	y=2;\
+    	echo ${x:-unset};\
+    	echo ${y:-unset}
+    1
+    2
+
+This approach is less global and version 3 compliant than `.ONESHELL`, but it's a bit
+noisy.
+
+
+More complex stateful operations that require a persistent shell should
+probably become their own shell script. Many shells can be told to print
+commands before running them using '-v'
+
+```makefile
+.PHONY: shell-script
+shell-script: script.sh
+	/bin/sh -v $<
+
+.INTERMEDIATE: script.sh
+.SILENT: script.sh
+script.sh: CUSTOM=$(APPEND-TO-TARGET)
+script.sh:
+	x=1
+	y=2
+	echo $${x:-unset}
+	echo $${y:-unset}
+```
+
+    $ make shell-script
+    /bin/sh -v script.sh
+    x=1
+    y=2
+    echo ${x:-unset}
+    1
+    echo ${y:-unset}
+    2
+    rm script.sh
+
+
+
+As with any technique, custom SHELLs can be misused, but if used correctly
+they provide an opportunity to remove unnecessary repetition from your
+Makefile and make it easier to focus on what's important.
+
+# APPENDIX
+
+A. What's a recipe?
+===================
+
+B. What's a target?
+===================
+
+C. What's a rule?
+===================
+
+Here's how the make manual defines rule, recipe, and target:
+
+> A simple makefile consists of /rules/ with the following shape:
+>
+>   target … : prerequisites …
+>   	recipe
+>   	…
+>   	…
+>
+> A /target/ is usually the name of a file that is generated by a program;
+> examples of targets are executables or object files. A target can also be
+> the name of an action to carry out, such as 'clean' (see Phony Targets).
+>
+> A /prerequisite/ is a file that is used as input to create the target. A
+> target often depends on several files.
+>
+> A /recipe/ is an action that `make` carries out. A recipe may have more than
+> one command, either on the same line or each on its own line. **Please
+> note:** you need to put a tab character at the beginning of every recipe
+> line! This is an obscurity that catches the unwary. […]
+
+(https://www.gnu.org/software/make/manual/make.html#What-a-Rule-Looks-Like)
+
+D. What does `.PHONY` do?
+==============================
+
+By default, `make` assumes its targets are actual files. If a file with the
+same name as the target exists and is newer than all its prerequisites, `make`
+won't bother to run its rule, assuming the file is already up-to-date.
+
+> A phony target is one that is not really the name of a file; rather it is
+> just a name for a recipe to be executed when you make an explicit request.
+> There are two reasons to use a phony target; to avoid a conflict with a file
+> of the same name, and to improve performance.
+>
+> […]
+>
+> [Y]ou can explicitly declare the target to be phony by making it a
+> prerequisite of the special target `.PHONY` (see Special Built-in Target
+> Names) as follows:
+>
+> ```
+> .PHONY: clean
+> clean:
+> 	rm *.o temp
+> ```
+>
+> Once this is done, `make clean` will run the recipe regardless of whether
+> there is a file named `clean`.
+
+(https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html)
+
+While declaring targets `.PHONY` isn't strictly necessary, I stick to it here
+as I consider it good style.
+
+E. Why are you using double dollar signs everywhere (`$$`)?
+===========================================================
+
+`$` is used by `make` to introduce its variables and function calls, so to use
+`$` in a recipe step it must be escaped. `make` expands `$$` to just `$`
+before evaluating recipe steps.
+
+For more details, see the make manual:
+(https://www.gnu.org/software/make/manual/html_node/Reference.html)
+
+F. Why did you start listing targets twice?
+===========================================
+
+In the rule definition:
+
+```make
+use-bash: SHELL=/bin/bash
+use-bash:
+```
+
+I'm using `make`'s syntax for target-specific variable assignments. The
+variable assignments need to go on a separate line than the prerequisites
+(even if a target has no prerequisites):
+
+> Variable values in `make` are usually global; that is, they are the same
+> regardless of where they are evaluated (unless they're reset, of course). One
+> exception to that is automatic variables (see Automatic Variables).
+>
+> The other exception is /target-specific variable values/. This feature
+> allows you to define different values for the same variable, based on the
+> target `make` is currently building. As with automatic variables, these
+> values are only available within the context of a target's recipe (and in
+> other target-specific assignments).
+
+(https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html)
+
+G. What does `define` do?
+==============================
+
+`define` is `make`'s syntax for defining a multi-line variable:
+
+> Another way to set the value of a variable is to use the `define` directive.
+> This directive has an unusual syntax which allows newline characters to be
+> included in the value, which is convenient for defining both canned
+> sequences of commands (see Defining Canned Recipes), and also sections of
+> makefile syntax to use with eval (see Eval Function).
+>
+> The `define` directive is followed on the same line by the name of the
+> variable being defined and an (optional) assignment operator, and nothing
+> more. The value to give the variable appears on the following lines. The end
+> of the value is makred by a line containing just the word `endef`.
+
+(https://www.gnu.org/software/make/manual/html_node/Multi_002dLine.html)
+
+H. What does `$@` mean?
+==========================
+
+`$@` is one of `make`'s automatic variables, set locally for each rule. It
+resolves to the filename matched by the target.
+
+Most often, this is simply used to avoid repeating the target name inside the
+rule (especially useful if you decide to change the name of the target later).
+
+However, since variables defined by `=` in the Makefile are lazily evaluated,
+this makes it possible to have global variables (like APPEND-TO-TARGET) refer
+to the current target's name:
+
+  define APPEND-TO-TARGET
+  w(){
+  	echo "$$2" >>$@;
+  };w
+  endef
+
+/bin/sh and other shells also have a variable named `$@` (escaped in the
+Makefile as `$$@`) which is an array of all the arguments to a shell function.
+
+For more on `make`'s automatic variables, see the make manual
+(https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html).
+
+For more more on the lazy evaluation of `make` variables see the description
+of /recursively expanded/ variables in the make manual
+(https://www.gnu.org/software/make/manual/html_node/Flavors.html).
+
+For more on the shell variable `$@` see the description of `@` under "Special
+Parameters" in `man bash`.
+
+I. What does `.INTERMEDIATE` do?
+=====================================
+
+Sometimes it's necessary to generate /intermediate/ files as a step between
+your input files and your ultimate product. These intermediate files serve no
+purpose in-and-of themselves and can litter your source directory if not
+cleaned up.
+
+For example, if I compile several .c source files into .o object files, then
+combine all the .o files into a single .a archive file, I have no use for the
+.o files once I have the .a file. They're just cluttering my build directory
+and can be deleted.
+
+Make can sometimes autodetect such intermediate files, but normally listing a
+file as a target or prerequisite prevents such detection.  Adding the file as
+a prerequisite of `.INTERMEDIATE` is how `make` can be explicitly told to
+delete a file if it's generated as part of a chain.
+
+I tagged the `APPEND-TO-FILE` file targets as `.INTERMEDIATE` as the only real
+purpose of those files is to be used in the examples and tests, and won't be
+needed after `make` completes.
+
+For more on intermediate files, I recommend reading the "Chains of Implicit
+Rules" section of the make manual
+(https://www.gnu.org/software/make/manual/html_node/Chained-Rules.html).
+
+J. What does `.SILENT` do?
+===============================
+
+By default, `make` prints each recipe step before it is executed.
+
+> If you specify prerequisites for `.SILENT`, then `make` will not print the
+> recipe used to remake those particular files before executing them.
+
+- ["Special Targets"](https://www.gnu.org/software/make/manual/html_node/Special-Targets.html)
+
+More commonly, you'll see people silencing single steps of a recipe by
+prefixing the step with `@` or running `make --silent` to silence all recipes.
+
+I tagged the `APPEND-TO-TARGET` rules as `.SILENT` so that the echoing of the
+recipe steps during file generation wouldn't be mistaken for the echoing
+during the rules that depend on those files.
+
+----
+
+With some work, we can come up with a custom SHELL function that persists a
+shell between recipe steps and addresses those three issues:
 
 ```makefile
 define PERSIST
@@ -521,31 +896,31 @@ define PERSIST
 : comments using ':', the no-op command, as long as the comment does not use   ;
 : any shell syntax that would break it.                                        ;
 
-: Path for the named pipe used to pass a stream of recipe lines to a           ;
+: Path for the named pipe used to pass a stream of recipe steps to a           ;
 : backgrounded persistent shell                                                ;
 entire_recipe=.$@-entire_recipe.fifo;
 
-: Path for the named pipe used to indicate when a single recipe line has       ;
+: Path for the named pipe used to indicate when a single recipe step has       ;
 : finished running                                                             ;
-recipe_line_complete=.$@-recipe_line_complete.fifo;
+recipe_step_complete=.$@-recipe_step_complete.fifo;
 
 start_background_shell_if_necessary(){
 	: Since the background process deletes the pipes when the shell is complete, ;
 	: assume that the background shell is running if and only if the pipes exist ;
 
-	if ! [[ -p $$entire_recipe && -p $$recipe_line_complete ]]; then
-		mkfifo $$entire_recipe $$recipe_line_complete;
+	if ! [[ -p $$entire_recipe && -p $$recipe_step_complete ]]; then
+		mkfifo $$entire_recipe $$recipe_step_complete;
 
 		: In a backgrounded process, run the entire recipe in a subshell and then  ;
 		: clean up the pipes                                                       ;
 		{
 			/bin/sh $$entire_recipe;
-			rm -f $$entire_recipe $$recipe_line_complete;
+			rm -f $$entire_recipe $$recipe_step_complete;
 		} &
 	fi;
 };
 
-run_recipe_line(){
+run_recipe_step(){
 	: Write the output of all the following commands to the recipe pipe for the  ;
 	: backgrounded shell.                                                        ;
 
@@ -560,24 +935,25 @@ run_recipe_line(){
 
 	exec >$$entire_recipe;
 
-	recipe_line=$$2;
-	echo "$$recipe_line";
+	recipe_step=$$2;
+	echo "$$recipe_step";
 
-	: Use the a pipe as a synchronization lock to detect when the backgrounded   ;
-	: shell has finished running this recipe line. Otherwise, if we did not wait,;
-	: the output of one line might print after make echoes the next recipe line  ;
-	echo "true > $$recipe_line_complete";
-	cat $$recipe_line_complete >/dev/null;
+	: Use the output pipe as a synchronization lock to detect when the           ;
+	: backgrounded shell has finished running this recipe step. Otherwise, if we ;
+	: did not wait, the output of one step might print after make echoes the next;
+	: recipe step                                                                ;
+	echo "true > $$recipe_step_complete";
+	cat $$recipe_step_complete >/dev/null;
 
 	: Use "sleep" to keep the recipe file handle open in the background          ;
-	: for long enough for make to call run_recipe_line again with the next       ;
-	: recipe line, preventing the background shell from ending between recipe    ;
-	: lines                                                                      ;
+	: for long enough for make to call run_recipe_step again with the next       ;
+	: recipe step, preventing the background shell from ending between recipe    ;
+	: steps                                                                      ;
 	sleep .1 &
 };
 
 start_background_shell_if_necessary;
-run_recipe_line
+run_recipe_step
 endef
 
 .PHONY: persistent
@@ -618,263 +994,3 @@ using-stdin:
     tr a-z A-Z
     HELLO
 
-But even without that issue, there's no driving need for such a complicated
-solution.  Recipes can already be split across multiple lines using
-backslashes:
-
-```makefile
-.PHONY: multiline
-multiline:
-	x=1;\
-	y=2;\
-	echo $${x:-unset};\
-	echo $${y:-unset}
-```
-
-    $ make-v4 multiline
-    x=1;\
-    y=2;\
-    echo ${x:-unset};\
-    echo ${y:-unset}
-    1
-    2
-
-More complex stateful operations that require a persistent shell should
-probably become their own shell script. Many shells can be told to print
-commands before running them using '-v'
-
-```makefile
-.PHONY: shell-script
-shell-script: script.sh
-	/bin/sh -v $<
-
-.INTERMEDIATE: script.sh
-.SILENT: script.sh
-script.sh: CUSTOM=$(APPEND-TO-TARGET)
-script.sh:
-	x=1
-	y=2
-	echo $${x:-unset}
-	echo $${y:-unset}
-```
-
-    $ make shell-script
-    /bin/sh -v script.sh
-    x=1
-    y=2
-    echo ${x:-unset}
-    1
-    echo ${y:-unset}
-    2
-    rm script.sh
-
-As with any technique, custom SHELLs can be misused, but if used correctly
-they provide an opportunity to remove unnecessary repetition from your
-Makefile and make it easier to focus on what's important.
-
-# APPENDIX
-
-A. What's a recipe?
-===================
-
-B. What's a target?
-===================
-
-C. What's a rule?
-===================
-
-Here's how the make manual defines rule, recipe, and target:
-
-> A simple makefile consists of /rules/ with the following shape:
->
->   target … : prerequisites …
->   	recipe
->   	…
->   	…
->
-> A /target/ is usually the name of a file that is generated by a program;
-> examples of targets are executables or object files. A target can also be
-> the name of an action to carry out, such as 'clean' (see Phony Targets).
->
-> A /prerequisite/ is a file that is used as input to create the target. A
-> target often depends on several files.
->
-> A /recipe/ is an action that `make` carries out. A recipe may have more than
-> one command, either on the same line or each on its own line. **Please
-> note:** you need to put a tab character at the beginning of every recipe
-> line! This is an obscurity that catches the unwary. […]
-
-(https://www.gnu.org/software/make/manual/make.html#What-a-Rule-Looks-Like)
-
-D. What's that .PHONY thing?
-============================
-
-By default, `make` assumes its targets are actual files. If a file with the
-same name as the target exists and is newer than all its prerequisites, `make`
-won't bother to run its rule, assuming the file is already up-to-date.
-
-> A phony target is one that is not really the name of a file; rather it is
-> just a name for a recipe to be executed when you make an explicit request.
-> There are two reasons to use a phony target; to avoid a conflict with a file
-> of the same name, and to improve performance.
->
-> […]
->
-> [Y]ou can explicitly declare the target to be phony by making it a
-> prerequisite of the special target `.PHONY` (see Special Built-in Target
-> Names) as follows:
->
-> ```
-> .PHONY: clean
-> clean:
-> 	rm *.o temp
-> ```
->
-> Once this is done, `make clean` will run the recipe regardless of whether
-> there is a file named `clean`.
-
-(https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html)
-
-WHile declaring targets `.PHONY` isn't strictly necessary, I stick to it here
-as I consider it good style.
-
-E. What's that .DEFAULT_GOAL thing?
-===================================
-
-`.DEFAULT_GOAL` is a special variable in `make`. If specified, it determines
-which rule is run when `make` is run at the command line with no arguments. If
-undefined, `make` just executes the first rule in the Makefile when called
-with no arguments.
-
-For more details, see the description of `.DEFAULT_GOAL` in the Special
-Variables section of the make manual
-(https://www.gnu.org/software/make/manual/html_node/Special-Variables.html).
-
-F. What's that define thing?
-============================
-
-`define` is `make`'s syntax for defining a multi-line variable:
-
-> Another way to set the value of a variable is to use the `define` directive.
-> This directive has an unusual syntax which allows newline characters to be
-> included in the value, which is convenient for defining both canned
-> sequences of commands (see Defining Canned Recipes), and also sections of
-> makefile syntax to use with eval (see Eval Function).
->
-> The `define` directive is followed on the same line by the name of the
-> variable being defined and an (optional) assignment operator, and nothing
-> more. The value to give the variable appears on the following lines. The end
-> of the value is makred by a line containing just the word `endef`.
-
-(https://www.gnu.org/software/make/manual/html_node/Multi_002dLine.html)
-
-G. Why did you start listing targets twice?
-===========================================
-
-In the rule definition:
-
-```make
-use-bash: SHELL=/bin/bash
-use-bash:
-```
-
-I'm using `make`'s syntax for target-specific variable assignments. The
-variable assignments need to go on a separate line than the prerequisites
-(even if a target has no prerequisites):
-
-> Variable values in `make` are usually global; that is, they are the same
-> regardless of where they are evaluated (unless they're reset, of course). One
-> exception to that is automatic variables (see Automatic Variables).
->
-> The other exception is /target-specific variable values/. This feature
-> allows you to define different values for the same variable, based on the
-> target `make` is currently building. As with automatic variables, these
-> values are only available within the context of a target's recipe (and in
-> other target-specific assignments).
-
-(https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html)
-
-H. Why are you using double dollar signs everywhere ($$)?
-=========================================================
-
-`$` is used by `make` to introduce its variables and function calls, so to use
-`$` in a recipe line it must be escaped. `make` expands `$$` to just `$`
-before evaluating recipe lines.
-
-For more details, see the make manual:
-(https://www.gnu.org/software/make/manual/html_node/Reference.html)
-
-I. What's that $@ thing?
-========================
-
-`$@` is one of `make`'s automatic variables, set locally for each rule. It
-resolves to the filename matched by the target.
-
-Most often, this is simply used to avoid repeating the target name inside the
-rule (especially useful if you decide to change the name of the target later).
-
-However, since variables defined by `=` in the Makefile are lazily evaluated,
-this makes it possible to have global variables (like APPEND-TO-TARGET) refer
-to the current target's name:
-
-  define APPEND-TO-TARGET
-  w(){
-  	echo "$$2" >>$@;
-  };w
-  endef
-
-/bin/sh and other shells also have a variable named `$@` (escaped in the
-Makefile as `$$@`) which is an array of all the arguments to a shell function.
-
-For more on `make`'s automatic variables, see the make manual
-(https://www.gnu.org/software/make/manual/html_node/Automatic-Variables.html).
-
-For more more on the lazy evaluation of `make` variables see the description
-of /recursively expanded/ variables in the make manual
-(https://www.gnu.org/software/make/manual/html_node/Flavors.html).
-
-For more on the shell variable `$@` see the description of `@` under "Special
-Parameters" in `man bash`.
-
-J. What's that .INTERMEDIATE thing?
-===================================
-
-Sometimes it's necessary to generate /intermediate/ files as a step between
-your input files and your ultimate product. These intermediate files serve no
-purpose in-and-of themselves and can litter your source directory if not
-cleaned up.
-
-For example, if I compile several .c source files into .o object files, then
-combine all the .o files into a single .a archive file, I have no use for the
-.o files once I have the .a file. They're just cluttering my build directory
-and can be deleted.
-
-Make can sometimes autodetect such intermediate files, but normally listing a
-file as a target or prerequisite prevents such detection.  Adding the file as
-a prerequisite of `.INTERMEDIATE` is how `make` can be explicitly told to
-delete a file if it's generated as part of a chain.
-
-I tagged the `APPEND-TO-FILE` file targets as `.INTERMEDIATE` as the only real
-purpose of those files is to be used in the examples and tests, and won't be
-needed after `make` completes.
-
-For more on intermediate files, I recommend reading the "Chains of Implicit
-Rules" section of the make manual
-(https://www.gnu.org/software/make/manual/html_node/Chained-Rules.html).
-
-K. What's that .SILENT thing?
-=============================
-
-By default, `make` prints each recipe line before it is executed.
-
-> If you specify prerequisites for `.SILENT`, then `make` will not print the
-> recipe used to remake those particular files before executing them.
-
-- ["Special Targets"](https://www.gnu.org/software/make/manual/html_node/Special-Targets.html)
-
-More commonly, you'll see people silencing single lines of a recipe by
-prefixing the line with `@` or running `make --silent` to silence all recipes.
-
-I tagged the `APPEND-TO-TARGET` rules as `.SILENT` so that the echoing of the
-recipe lines during file generation wouldn't be mistaken for the echoing
-during the rules that depend on those files.

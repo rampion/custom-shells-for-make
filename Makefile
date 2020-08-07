@@ -86,7 +86,7 @@ test:
 	@make --no-print-directory _test_v4
 
 README.makefile: $(dir $(MAKEFILE_LIST))README.md
-	sed -n '/^ *```makefile$$/,/^ *```$$/{//g;s/^ *//;p;}' $< > $@
+	sed -n '/^ *```makefile$$/,/^ *```$$/{//g;s/^  //;p;}' $< > $@
 
 ################################################################################
 ### Preview how github will render README.md ###################################
