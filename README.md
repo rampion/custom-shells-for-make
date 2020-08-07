@@ -29,24 +29,27 @@ some interesting behaviour.
 
 There are three main sections:
 
-1. Specifying a custom `SHELL`
-2. Writing recipes in non-shell programming languages
-3. Using a single shell for an entire recipe
+1. [Specifying a custom `SHELL`](#1-specifying-a-custom-shell)
+2. [Writing recipes in non-shell programming languages](#2-writing-recipes-in-non-shell-programming-languages)
+3. [Using a single shell for an entire recipe](#3-using-a-single-shell-for-an-entire-recipe)
 
 There's also an appendix detailing various Makefile features some readers
 might not be familiar with:
 
 <ol type="A">
-<li>What's a recipe?</li>
-<li>What's a target?</li>
-<li>What's a rule?</li>
-<li>What does <code>.PHONY</code> do?</li>
-<li>Why are you using double dollar signs (<code>$$</code>)?</li>
-<li>Why did you start listing targets twice?</li>
-<li>What does <code>define</code> do?</li>
-<li>What does <code>$@</code> mean?</li>
-<li>What does <code>.INTERMEDIATE</code> do?</li>
-<li>What does <code>.SILENT</code> do?</li>
+<li><a href="#a-whats-a-recipe">What's a recipe?</a></li>
+<li><a href="#b-whats-a-target">What's a target?</a></li>
+<li><a href="#c-whats-a-rule">What's a rule?</a></li>
+<li><a href="#d-what-does-phony-do">What does <code>.PHONY</code> do?</a></li>
+<li><a href="#e-why-are-you-using-double-dollar-signs-everywhere-">Why are you using double dollar signs (<code>$$</code>)?</a></li>
+<li><a href="#f-why-did-you-start-listing-targets-twice">Why did you start listing targets twice?</a></li>
+<li><a href="#g-how-does-the-shell-work-differently-in-different-versions">How does the <code>SHELL</code> work differently in different versions?</a></li>
+<li><a href="#h-what-does-it-mean-to-define-a-makefile-variable-lazily">What does it mean
+to define a makefile variable lazily?</a></li>
+<li><a href="#i-what-does-define-do">What does <code>define</code> do?</a></li>
+<li><a href="#j-what-does--mean">What does <code>$@</code> mean?</a></li>
+<li><a href="#k-what-does-intermediate-do">What does <code>.INTERMEDIATE</code> do?</a></li>
+<li><a href="#l-what-does-silent-do">What does <code>.SILENT</code> do?</a></li>
 </ol>
 
 
@@ -84,86 +87,44 @@ The value of `SHELL` doesn't have to be a path to an executable file, though.
 It can contain an arbitrary `sh` command.  The only requirement is that the
 command can be run with `-c` and the current recipe step.
 
-For example, we could use the shell's `printf` command to inspect our arguments:
+For example, we could use the builtin `printf` command to inspect the arguments
+`SHELL` is called with:
 
     $ make print-shell-name SHELL='printf arg\ =\ %s\\n'
     echo $0
     arg = -c
     arg = echo $0
 
-## Digression: chaining multiple commands
-To do anything much more complex than that, we need to have a `SHELL`
-that contains multiple shell commands chained together.
-
-In `make` v3 this is trivial, the `SHELL` can contain multiple commands
-chained together with `;` as long as it *ends* in something that can accept the
-`-c` and the recipe step.  We can run other `sh` commands first and then tack on
-a call to `/bin/sh`.
+[The `SHELL` works slightly differently in different versions of `make`](#g-how-does-the-shell-work-differently-in-different-versions), so
+to do anything more complicated, it's helpful to define `SHELL` lazily in terms
+of another makefile variable.
 
 ```makefile
-.PHONY: greeting
-greeting:
-	echo hi
-```
-
-    $ make-v3 greeting SHELL='echo "--before--";/bin/sh'
-    echo hi
-    --before--
-    hi
-
-This changed in `make` v4, which behaves differently when `SHELL` is defined as
-a semicolon-separated chain; instead, everything is passed as an argument to the
-first command:
-
-    $ make-v4 greeting SHELL='echo "--before--";/bin/sh'
-    echo hi
-    "--before--";/bin/sh -c echo hi
-
-The differences between the two versions are similar to the differences betweeen
-using `eval` and `exec`:
-
-    $ eval 'echo "--before--";/bin/sh -c echo\ hi'
-    --before--
-    hi
-    $ /bin/sh -c 'exec $@' /bin/sh 'echo "--before--";/bin/sh -c echo hi'
-    "--before--";/bin/sh -c echo hi
-
-However, it's still possible to define a `SHELL` for `make` v4 that contains a
-multi-command chain by escaping it and wrapping it in another call to `/bin/sh`.
-
-    $ make-v4 greeting SHELL='/bin/sh -c echo\ "--before--";/bin/sh\ "$$@" /bin/sh'
-    echo hi
-    --before--
-    hi
-
-If you're going to be changing the `SHELL` value per-recipe and you want to be
-compatible with v3 and v4, this escaping can be centralized by defining `SHELL`
-lazily in terms of another makefile variable that contains the unescaped
-definition. Here we arbitrarily name that variable `CUSTOM`.
-
-```makefile
-CUSTOM = /bin/sh
-export CUSTOM
+CaCO3 = /bin/sh
+export CaCO3
 
 ifeq (3, $(firstword $(subst ., ,$(MAKE_VERSION))))
-	SHELL = $(CUSTOM)
-else
-	SHELL=/bin/sh -c eval\ "f(){\ $$CUSTOM\ "'"$$@"'";\ }";\ f\ "$$@" /bin/sh
+	# escape so multiline define statements work properly
+	SHELL=eval "f(){ $$CaCO3 "'"$$@"'"; }"; f
+endif
+
+ifeq (4, $(firstword $(subst ., ,$(MAKE_VERSION))))
+	# escape so multiple commands can be chained together
+	SHELL=/bin/sh -c eval\ "f(){\ $$CaCO3\ "'"$$@"'";\ }";\ f\ "$$@" /bin/sh
 endif
 ```
 
-We'll be using `CUSTOM` for the rest of the article, but it's worth remembering
-that `CUSTOM` isn't a special Makefile variable, it's merely used in our
+Here, we arbitrarily named the variable `SHELL` is built from `CaCO3`, mainly
+for the [pun](https://en.wikipedia.org/wiki/CaCO3#Biological_sources).
+We'll be using `CaCO3` for the rest of the article, but it's worth remembering
+that `CaCO3` isn't a special Makefile variable, it's merely used in our
 definition of `SHELL`.
 
----
-
-Now that we know how to chain multiple commands, we can tell `make` to run a
-command before each recipe step:
+With that in place, we can tell `make` to run a command before each recipe step:
 
 ```makefile
 .PHONY: before-each-step
-before-each-step: CUSTOM=echo '---before---';/bin/sh
+before-each-step: CaCO3=echo '---before---';/bin/sh
 before-each-step:
 	echo one
 	echo two
@@ -182,17 +143,17 @@ before-each-step:
     three
 
 It's a little awkward trying to fit long commands into a one-liner next to
-the rule's SHELL definition, so we'll start using `make`'s `define` syntax
+the rule's `SHELL` definition, so we'll start using `make`'s `define` syntax
 for multi-line variable assignments.
 
 ```makefile
 define BEFORE-EACH-STEP
-echo '---before---';
+echo '---before---'
 /bin/sh
 endef
 
 .PHONY: before-with-define
-before-with-define: CUSTOM=$(BEFORE-EACH-STEP)
+before-with-define: CaCO3=$(BEFORE-EACH-STEP)
 before-with-define:
 	echo one
 	echo two
@@ -210,86 +171,17 @@ before-with-define:
     ---before---
     three
 
-`define`-blocks are pretty nice, but there's a fairly important gotcha. in
-`make` v3 newlines don't terminate commands as they would in a shell script when
-the script is invoked as SHELL, so there's a couple of things to look out for:
-
-- you have to terminate each command with a semicolon since all the lines are
-  effectively strung together
-
-  ```makefile
-  define MISSING-SEMICOLON
-  echo '--before--'
-  /bin/sh
-  endef
-
-  .PHONY: missing-semicolon
-  missing-semicolon: CUSTOM=$(MISSING-SEMICOLON)
-  missing-semicolon:
-  	echo ok
-  ```
-
-  ```
-    $ make-v3 missing-semicolon
-    echo ok
-    --before--
-    /bin/sh -c echo ok
-  ```
-
-  This is no longer a problem in `make` v4:
-
-  ```
-    $ make-v4 missing-semicolon
-    echo ok
-    --before--
-    ok
-  ```
-
-- you can't use an octothorpe (`#`) to create comments in the `define`-block as
-  it will cause all the following lines to be commented out
-
-  ```makefile
-  define WITH-OCTOTHORPE
-  echo '--before--';
-  # and now we call the shell;
-  /bin/sh
-  endef
-
-  .PHONY: with-octothorpe
-  with-octothorpe: CUSTOM=$(WITH-OCTOTHORPE)
-  with-octothorpe:
-  	echo ok
-  ```
-
-  ```
-    $ make-v3 with-octothorpe
-    echo ok
-    --before--
-  ```
-
-  Again, this is not a problem in `make` v4:
-
-  ```
-    $ make-v4 with-octothorpe
-    echo ok
-    --before--
-    ok
-  ```
-
-But with those restrictions in mind, we can still do some pretty interesting
-things before invoking the shell.
-
 For example, we could use the shell's `trap` command to run code when the shell
 exits, in effect setting up code to be called *after* each step of the recipe:
 
 ```makefile
 define AFTER-EACH-STEP
-trap 'echo ---after---' EXIT;
+trap 'echo ---after---' EXIT
 /bin/sh
 endef
 
-.PHONY: after-each-STEP
-after-each-step: CUSTOM=$(AFTER-EACH-STEP)
+.PHONY: after-each-step
+after-each-step: CaCO3=$(AFTER-EACH-STEP)
 after-each-step:
 	echo one
 	echo two
@@ -313,14 +205,14 @@ to use:
 ```makefile
 define CUSTOM-FUNCTION
 log(){
-	echo "<log message='$$@'/>";
-};
-export -f log;
+	echo "<log message='$$@'/>"
+}
+export -f log
 /bin/sh
 endef
 
 .PHONY: with-custom-function
-with-custom-function: CUSTOM=$(CUSTOM-FUNCTION)
+with-custom-function: CaCO3=$(CUSTOM-FUNCTION)
 with-custom-function:
 	log she sells sea shells by the sea shore
 	log pad kid poured curd pulled cod
@@ -332,14 +224,14 @@ with-custom-function:
     log pad kid poured curd pulled cod
     <log message='pad kid poured curd pulled cod'/>
 
-This whole time we've been passing the `-c` <recipe-step> arguments to as
+This whole time we've been passing the `-c` <recipe-step> arguments to a
 shell, but shells aren't the only commands that can be called this way.
 
 For example, `/bin/echo` will happily take `-c`:
 
 ```makefile
 .PHONY: use-echo
-use-echo: CUSTOM=/bin/echo
+use-echo: CaCO3=/bin/echo
 use-echo:
 	unique new york
 	red leather yellow leather
@@ -366,15 +258,16 @@ and have each recipe step invoked with that as its "shell":
 ```makefile
 define INSPECT
 inspect(){
-	echo "\$$# = $$#";
-	echo "\$$0 = $$0";
-	echo "\$$1 = $$1";
-	echo "\$$2 = $$2";
-};inspect
+	echo "\$$# = $$#"
+	echo "\$$0 = $$0"
+	echo "\$$1 = $$1"
+	echo "\$$2 = $$2"
+}
+inspect
 endef
 
 .PHONY: with-inspect
-with-inspect: CUSTOM=$(INSPECT)
+with-inspect: CaCO3=$(INSPECT)
 with-inspect:
 	Peter Piper picked a peck of pickled peppers
 	I wish I wore an irish wristwatch
@@ -398,8 +291,9 @@ without wrapping each line in `echo "…" >>target`:
 ```makefile
 define APPEND-TO-TARGET
 w(){
-	echo "$$2" >>$@;
-};w
+	echo "$$2" >>$@
+}
+w
 endef
 
 .PHONY: file-demo
@@ -408,7 +302,7 @@ file-demo: cheese-list.txt
 
 .INTERMEDIATE: cheese-list.txt
 .SILENT: cheese-list.txt
-cheese-list.txt: CUSTOM=$(APPEND-TO-TARGET)
+cheese-list.txt: CaCO3=$(APPEND-TO-TARGET)
 cheese-list.txt:
 	· cheddar
 	· edam
@@ -434,20 +328,21 @@ those arguments, pass them to whatever commands we want, and manipulate those
 commands' output.
 
 For example, we could interpret the recipe steps in a non-shell programming
-language, like ruby.
+language.
 
-Here we pass the recipe step to ruby, asking it to evaluate the step and
+Here we pass the recipe steps to ruby, asking it to evaluate the step and
 print its resulting value.
 
 ```makefile
 define RUBY
 r(){
-	ruby -e "p ($$2)" | sed 's/^/# /';
-}; r
+	ruby -e "p ($$2)" | sed 's/^/# /'
+}
+r
 endef
 
 .PHONY: in-ruby
-in-ruby: CUSTOM=$(RUBY)
+in-ruby: CaCO3=$(RUBY)
 in-ruby:
 	puts "hello ruby!"
 	Struct.new(:a,:b).new(1,2)
@@ -475,7 +370,7 @@ g(){
 endef
 
 .PHONY: in-haskell
-in-haskell: CUSTOM=$(GHCI)
+in-haskell: CaCO3=$(GHCI)
 in-haskell:
 	putStrLn "hello haskell!"
 	let fibs = 1 : 1 : zipWith (+) fibs (tail fibs) in take 10 fibs
@@ -487,7 +382,7 @@ in-haskell:
     let fibs = 1 : 1 : zipWith (+) fibs (tail fibs) in take 10 fibs
     -- [1,1,2,3,5,8,13,21,34,55]
 
-Neither of those is as popular as python, so let's give that a whilr,
+Neither of those is as popular as python, so let's give that a whirl,
 with some useful imports for file manipulation:
 
 ```makefile
@@ -498,7 +393,7 @@ p(){
 endef
 
 .PHONY: in-python
-in-python: CUSTOM=$(PYTHON)
+in-python: CaCO3=$(PYTHON)
 in-python:
 	print("hello from python!")
 	pathlib.Path('a-file').touch()
@@ -574,8 +469,8 @@ GNU Make version 4 introduced [the `.ONESHELL` special target](https://www.gnu.o
 `.ONESHELL` is very easy to use, but it has some drawbacks.
 
 - It's a bit of a blunt instrument, as you can't use `.ONESHELL` to specify
-  that a single recipe should be run in a persistent shell, only to tell
-  `make` to use that strategy for *all* the recipes in a file
+  that a single rule should be run in a persistent shell, only to tell
+  `make` to use that strategy for *all* the rules in a file
 
 - It only works in GNU Make v4 and above, and will fall back silently
   to a non-persistent shell in v3:
@@ -657,16 +552,16 @@ noisy.
 
 More complex stateful operations that require a persistent shell should
 probably become their own shell script. Many shells can be told to print
-commands before running them using '-v'
+commands before running them using '-v', which seems like a happy medium.
 
 ```makefile
-.PHONY: shell-script
-shell-script: script.sh
+.PHONY: using-shell-script
+using-shell-script: script.sh
 	/bin/sh -v $<
 
 .INTERMEDIATE: script.sh
 .SILENT: script.sh
-script.sh: CUSTOM=$(APPEND-TO-TARGET)
+script.sh: CaCO3=$(APPEND-TO-TARGET)
 script.sh:
 	x=1
 	y=2
@@ -674,7 +569,7 @@ script.sh:
 	echo $${y:-unset}
 ```
 
-    $ make shell-script
+    $ make using-shell-script
     /bin/sh -v script.sh
     x=1
     y=2
@@ -684,9 +579,9 @@ script.sh:
     2
     rm script.sh
 
+---
 
-
-As with any technique, custom SHELLs can be misused, but if used correctly
+As with any technique, custom `SHELL`s can be misused, but if used correctly
 they provide an opportunity to remove unnecessary repetition from your
 Makefile and make it easier to focus on what's important.
 
@@ -742,11 +637,11 @@ won't bother to run its rule, assuming the file is already up-to-date.
 > prerequisite of the special target `.PHONY` (see Special Built-in Target
 > Names) as follows:
 >
-> ```
-> .PHONY: clean
-> clean:
-> 	rm *.o temp
-> ```
+>
+>     .PHONY: clean
+>     clean:
+>     	rm *.o temp
+>
 >
 > Once this is done, `make clean` will run the recipe regardless of whether
 > there is a file named `clean`.
@@ -792,7 +687,189 @@ variable assignments need to go on a separate line than the prerequisites
 
 (https://www.gnu.org/software/make/manual/html_node/Target_002dspecific.html)
 
-G. What does `define` do?
+G. How does the `SHELL` work differently in different versions?
+===============================================================
+
+In `make` version 3, the `SHELL` can contain multiple commands chained together
+with `;` as long as it *ends* in something that can accept the `-c` and the
+recipe step.  We can run other `sh` commands first and then tack on a call to
+`/bin/sh`.
+
+```makefile
+.PHONY: greeting
+greeting:
+	echo hi
+```
+
+    $ make-v3 greeting SHELL='echo "--before--";/bin/sh'
+    echo hi
+    --before--
+    hi
+
+This changed in `make` v4, which behaves differently when `SHELL` is defined as
+a semicolon-separated chain; instead, everything is passed as an argument to the
+first command:
+
+    $ make-v4 greeting SHELL='echo "--before--";/bin/sh'
+    echo hi
+    "--before--";/bin/sh -c echo hi
+
+The differences between the two versions are similar to the differences betweeen
+using `eval` and `exec`:
+
+    $ eval 'echo "--before--";/bin/sh -c echo\ hi'
+    --before--
+    hi
+    $ /bin/sh -c 'exec $@' /bin/sh 'echo "--before--";/bin/sh -c echo hi'
+    "--before--";/bin/sh -c echo hi
+
+However, it's still possible to define a `SHELL` for `make` v4 that contains a
+multi-command chain by escaping the command chain and wrapping it in another
+call to `/bin/sh`.
+
+    $ make-v4 greeting SHELL='/bin/sh -c echo\ "--before--";/bin/sh\ "$$@" /bin/sh'
+    echo hi
+    --before--
+    hi
+
+Defining a make function that will transform a `SHELL` that works for version 3
+into one that works for version 4 is a little tricky, since there's 
+[no `make` function for escaping shell commands](https://www.gnu.org/software/make/manual/html_node/Functions.html#Functions).
+
+The workaround used in this article is to export the desired command chain as an
+environment variable, and use `eval` to transform that into a runnable command:
+
+```make
+CaCO3 = /bin/sh
+export CaCO3
+
+# ‥.
+
+ifeq (4, $(firstword $(subst ., ,$(MAKE_VERSION))))
+	# escape so multiple commands can be chained together
+	SHELL=/bin/sh -c eval\ "f(){\ $$CaCO3\ "'"$$@"'";\ }";\ f\ "$$@" /bin/sh
+endif
+```
+
+    $ make-v4 greeting CaCO3='echo "--before--";/bin/sh'
+    echo hi
+    --before--
+    hi
+
+This workaround does have a case where it handles command-chains differently
+than `make` version 3 does, multi-line command chains from `define` blocks:
+
+```makefile
+define MISSING-SEMICOLON
+echo '--before--'
+/bin/sh
+endef
+
+define WITH-OCTOTHORPE
+printf -- '--be';
+# and breathe;
+printf 'fore--\n';
+/bin/sh
+endef
+```
+
+`define` blocks make it easy to define a larger command chain to be used as a
+`SHELL` command. They look like writing a shellscript, rather than a one-liner.
+However, somewhat unintuitively `make` version 3 treats command chains used as a
+`SHELL` as if they were defined on a single line.
+
+This means, unlike in a script, commands must be terminated by a semicolon:
+
+    $ make-v3 greeting 'SHELL=$(MISSING-SEMICOLON)'
+    echo hi
+    --before--
+    /bin/sh -c echo hi
+
+And an unquoted `#` anywhere in the script will comment out the remaining lines:
+
+    $ make-v3 greeting 'SHELL=$(WITH-OCTOTHORPE)'
+    echo hi
+    --be (no-eol)
+
+The effect is similar to that of calling `/bin/sh` with `eval $@` rather than
+`eval "$@"`:
+
+    $ SCRIPT=$'echo one\necho two\necho three'
+    $ echo "$SCRIPT"
+    echo one
+    echo two
+    echo three
+    $ /bin/sh -c 'eval $@' /bin/sh "$SCRIPT"
+    one echo two echo three
+    $ /bin/sh -c 'eval "$@"' /bin/sh "$SCRIPT"
+    one
+    two
+    three
+
+    $ SCRIPT=$'echo one;\necho two;\n# skip three;\necho four'
+    $ echo "$SCRIPT"
+    echo one;
+    echo two;
+    # skip three;
+    echo four
+    $ /bin/sh -c 'eval $@' /bin/sh "$SCRIPT"
+    one
+    two
+    $ /bin/sh -c 'eval "$@"' /bin/sh "$SCRIPT"
+    one
+    two
+    four
+    $ SCRIPT=$'echo one\n# skip two\necho three'
+
+The workaround for command chains for `make` version 4 has neither of these
+gotchas:
+
+    $ make-v4 greeting 'CaCO3=$(MISSING-SEMICOLON)'
+    echo hi
+    --before--
+    hi
+    $ make-v4 greeting 'CaCO3=$(WITH-OCTOTHORPE)'
+    echo hi
+    --before--
+    hi
+
+So, rather than change the version 4 workaround to have the same surprising
+behaviour as `make` version 3, this article reuses the trick of passing the
+command chain to `eval` through an environment variable:
+
+```make
+ifeq (3, $(firstword $(subst ., ,$(MAKE_VERSION))))
+	# escape so multiline define statements work properly
+	SHELL=eval "f(){ $$CaCO3 "'"$$@"'"; }"; f
+endif
+```
+
+    $ make-v3 greeting 'CaCO3=$(MISSING-SEMICOLON)'
+    echo hi
+    --before--
+    hi
+    $ make-v3 greeting 'CaCO3=$(WITH-OCTOTHORPE)'
+    echo hi
+    --before--
+    hi
+
+H. What does it mean to define a makefile variable lazily?
+==========================================================
+
+`make`'s `=` operator captures the symbolic representation of the
+right-hand-side, unlike most languages which capture its value.
+
+When a makefile variable's value is needed (to be printed, or in the case of
+`SHELL`, to determine what to run), the definition is evaluated in terms of the
+current values of any referenced variables instead of their values at definition
+time.
+
+This article uses this feature to define `SHELL` in terms of `CaCO3` once,
+since the lookup for `CaCO3`'s value is deferred until it is actually needed,
+allowing users to define `CaCO3` on a per-rule basis.
+
+
+I. What does `define` do?
 ==============================
 
 `define` is `make`'s syntax for defining a multi-line variable:
@@ -810,7 +887,7 @@ G. What does `define` do?
 
 (https://www.gnu.org/software/make/manual/html_node/Multi_002dLine.html)
 
-H. What does `$@` mean?
+J. What does `$@` mean?
 ==========================
 
 `$@` is one of `make`'s automatic variables, set locally for each rule. It
@@ -842,7 +919,7 @@ of /recursively expanded/ variables in the make manual
 For more on the shell variable `$@` see the description of `@` under "Special
 Parameters" in `man bash`.
 
-I. What does `.INTERMEDIATE` do?
+K. What does `.INTERMEDIATE` do?
 =====================================
 
 Sometimes it's necessary to generate /intermediate/ files as a step between
@@ -868,7 +945,7 @@ For more on intermediate files, I recommend reading the "Chains of Implicit
 Rules" section of the make manual
 (https://www.gnu.org/software/make/manual/html_node/Chained-Rules.html).
 
-J. What does `.SILENT` do?
+L. What does `.SILENT` do?
 ===============================
 
 By default, `make` prints each recipe step before it is executed.
@@ -885,70 +962,68 @@ I tagged the `APPEND-TO-TARGET` rules as `.SILENT` so that the echoing of the
 recipe steps during file generation wouldn't be mistaken for the echoing
 during the rules that depend on those files.
 
-----
+M. Secret bonus appendix
+========================
 
-With some work, we can come up with a custom SHELL function that persists a
-shell between recipe steps and addresses those three issues:
+With some work, we can come up with a custom `SHELL` function that persists a
+shell between recipe steps, can be used on a rule-by-rule basis, and works in
+make version3:
 
 ```makefile
 define PERSIST
-: Using octothorpe for comments is not make-v3 compatible, but we can fake     ;
-: comments using ':', the no-op command, as long as the comment does not use   ;
-: any shell syntax that would break it.                                        ;
+# Path for the named pipe used to pass a stream of recipe steps to a
+# backgrounded persistent shell
+entire_recipe=.$@-entire_recipe.fifo
 
-: Path for the named pipe used to pass a stream of recipe steps to a           ;
-: backgrounded persistent shell                                                ;
-entire_recipe=.$@-entire_recipe.fifo;
-
-: Path for the named pipe used to indicate when a single recipe step has       ;
-: finished running                                                             ;
-recipe_step_complete=.$@-recipe_step_complete.fifo;
+# Path for the named pipe used to indicate when a single recipe step has
+# finished running
+recipe_step_complete=.$@-recipe_step_complete.fifo
 
 start_background_shell_if_necessary(){
-	: Since the background process deletes the pipes when the shell is complete, ;
-	: assume that the background shell is running if and only if the pipes exist ;
+	# Since the background process deletes the pipes when the shell is complete,
+	# assume that the background shell is running if and only if the pipes exist
 
 	if ! [[ -p $$entire_recipe && -p $$recipe_step_complete ]]; then
-		mkfifo $$entire_recipe $$recipe_step_complete;
+		mkfifo $$entire_recipe $$recipe_step_complete
 
-		: In a backgrounded process, run the entire recipe in a subshell and then  ;
-		: clean up the pipes                                                       ;
+		# In a backgrounded process, run the entire recipe in a subshell and then
+		# clean up the pipes
 		{
-			/bin/sh $$entire_recipe;
-			rm -f $$entire_recipe $$recipe_step_complete;
+			/bin/sh $$entire_recipe
+			rm -f $$entire_recipe $$recipe_step_complete
 		} &
-	fi;
-};
+	fi
+}
 
 run_recipe_step(){
-	: Write the output of all the following commands to the recipe pipe for the  ;
-	: backgrounded shell.                                                        ;
+	# Write the output of all the following commands to the recipe pipe for the
+	# backgrounded shell.
 
-	: As long as at least one process has a writable file handle for the recipe  ;
-	: pipe open, EOF will not be written to the pipe and the backgrounded shell  ;
-	: will continue trying to run commands from it.                              ;
+	# As long as at least one process has a writable file handle for the recipe
+	# pipe open, EOF will not be written to the pipe and the backgrounded shell
+	# will continue trying to run commands from it.
 
-	: If instead commands wrote to the recipe pipe individually, then EOF would  ;
-	: be written to the pipe at the end of each command, allowing the            ;
-	: backgrounded                                                               ;
-	: shell to reach the "end" of the pipe and move on to cleanup prematurely.   ;
+	# If instead commands wrote to the recipe pipe individually, then EOF would
+	# be written to the pipe at the end of each command, allowing the
+	# backgrounded
+	# shell to reach the "end" of the pipe and move on to cleanup prematurely.
 
-	exec >$$entire_recipe;
+	exec >$$entire_recipe
 
-	recipe_step=$$2;
-	echo "$$recipe_step";
+	recipe_step=$$2
+	echo "$$recipe_step"
 
-	: Use the output pipe as a synchronization lock to detect when the           ;
-	: backgrounded shell has finished running this recipe step. Otherwise, if we ;
-	: did not wait, the output of one step might print after make echoes the next;
-	: recipe step                                                                ;
-	echo "true > $$recipe_step_complete";
-	cat $$recipe_step_complete >/dev/null;
+	# Use the output pipe as a synchronization lock to detect when the
+	# backgrounded shell has finished running this recipe step. Otherwise, if we
+	# did not wait, the output of one step might print after make echoes the next
+	# recipe step
+	echo "true > $$recipe_step_complete"
+	cat $$recipe_step_complete >/dev/null
 
-	: Use "sleep" to keep the recipe file handle open in the background          ;
-	: for long enough for make to call run_recipe_step again with the next       ;
-	: recipe step, preventing the background shell from ending between recipe    ;
-	: steps                                                                      ;
+	# Use "sleep" to keep the recipe file handle open in the background
+	# for long enough for make to call run_recipe_step again with the next
+	# recipe step, preventing the background shell from ending between recipe
+	# steps
 	sleep .1 &
 };
 
@@ -957,7 +1032,7 @@ run_recipe_step
 endef
 
 .PHONY: persistent
-persistent: CUSTOM=$(PERSIST)
+persistent: CaCO3=$(PERSIST)
 persistent:
 	x=1
 	y=2
@@ -977,13 +1052,14 @@ It is not a trivial chunk of scripting, but it can be done!
 
 But should it be used? No, probably not.
 
-For one, it's not completely functional; it doesn't connect STDIN to the STDIN
-of the backgrounded shell, so it'll work differently than a non-persistent
-shell there.
+For one, it's not completely functional
+
+It doesn't connect STDIN to the STDIN of the backgrounded shell, so it'll work
+differently than a non-persistent shell there.
 
 ```makefile
 .PHONY: using-stdin
-using-stdin: CUSTOM=$(PERSIST)
+using-stdin: CaCO3=$(PERSIST)
 using-stdin:
 	tr a-z A-Z
 ```
@@ -994,3 +1070,8 @@ using-stdin:
     tr a-z A-Z
     HELLO
 
+Not to mention that it'll fail completely when used on a multiline `if`, `while`
+or `for` loop, as the lines no longer run in lockstep with execution.
+
+The shell script approach is simpler and more robust, even if it does create a
+temporary file.
